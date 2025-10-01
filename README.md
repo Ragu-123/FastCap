@@ -1,4 +1,4 @@
-# Enhanced FastCap: An Ultra-Efficient Image Captioning Model
+# FastCap: An Efficient Image Captioning Model 
 
 Enhanced FastCap is a state-of-the-art, open-source image captioning model designed for ultra-efficient inference on standard CPUs while maintaining competitive quality. This project integrates nine novel techniques—from a Spatial-Mamba Vision Backbone to Adaptive Quantization-Aware Training—to create a model that is projected to be **5.1x faster** and **8.0x smaller** than current state-of-the-art solutions.
 
