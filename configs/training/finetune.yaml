@@ -1,0 +1,35 @@
+ 
+# Configuration for the fine-tuning phase of the EnhancedFastCap model.
+# This phase adapts a pre-trained model to a specific target dataset (e.g., COCO).
+
+# --- 1. General Training Configuration ---
+training:
+  seed: 42
+  batch_size: 32           # A standard batch size for fine-tuning
+  num_epochs: 10           # Fewer epochs are needed to adapt the model
+  learning_rate: 2.0e-5    # A much lower learning rate is crucial for fine-tuning
+  optimizer: 'AdamW'
+  lr_step_size: 4          # Adjust learning rate during the shorter run
+  lr_gamma: 0.1
+  checkpoint_dir: './checkpoints_finetune' # Save fine-tuned models in a new directory
+  
+  # CRITICAL: Start fine-tuning from the best pre-trained model checkpoint.
+  resume_checkpoint: './checkpoints_pretrain/best_checkpoint.pth.tar'
+
+# --- 2. Model Configuration ---
+# The model architecture is the same as the base model.
+student_config_path: 'configs/model/fastcap_base.yaml'
+
+# --- 3. Loss Weights for Fine-tuning ---
+# During fine-tuning, the primary focus is on the captioning quality for the target task.
+loss_weights:
+  caption_loss: 1.0        # Emphasize the main task loss
+  alignment_loss: 0.5      # Reduce the weight of the alignment loss
+  moe_aux_loss: 0.01       # Keep the MoE regularization
+
+# --- 4. Dataset Paths ---
+# Point to the specific, high-quality dataset for fine-tuning.
+dataset:
+  train_annotations: '/path/to/coco/annotations/captions_train2014.json'
+  val_annotations: '/path/to/coco/annotations/captions_val2014.json'
+  image_dir: '/path/to/coco/images/'

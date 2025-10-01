@@ -1,0 +1,16 @@
+torch
+torchvision
+einops
+Pillow
+requests
+datasets
+transformers
+sentence-transformers
+pycocotools
+pycocoevalcap
+pyyaml
+tqdm
+scikit-learn
+pandas
+numpy
+matplotlib

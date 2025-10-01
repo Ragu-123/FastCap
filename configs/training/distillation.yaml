@@ -1,0 +1,60 @@
+ 
+# Configuration for Progressive Multi-Teacher Distillation (PMTD) of the EnhancedFastCap model.
+# This file controls the knowledge transfer from multiple teacher models to the student.
+
+# --- 1. General Training Configuration ---
+# These settings are tailored for a distillation run.
+training:
+  seed: 42
+  batch_size: 32
+  num_epochs: 15           # Distillation is a form of training, so it requires multiple epochs
+  learning_rate: 5.0e-5    # Fine-tuning with a teacher often benefits from a smaller LR
+  optimizer: 'AdamW'
+  lr_step_size: 7
+  lr_gamma: 0.1
+  checkpoint_dir: './checkpoints_distilled' # Save the distilled model separately
+  
+  # Usually, distillation starts with a randomly initialized or pre-trained student
+  resume_checkpoint: null
+
+# --- 2. Student Model Configuration ---
+# The training script will use this path to load the student's architecture.
+student_config_path: 'configs/model/fastcap_base.yaml'
+
+# --- 3. Innovation 6: PMTD Specific Parameters ---
+distillation:
+  # Temperature for softening teacher and student logits during KL divergence calculation.
+  # Higher values create softer probability distributions.
+  temperature: 4.0
+  
+  # Weight for the primary task loss (e.g., CrossEntropy on ground truth).
+  # The total distillation loss will be weighted by (1 - task_loss_weight).
+  task_loss_weight: 0.3
+
+  # --- 4. Teacher Model Hierarchy ---
+  # A list of pre-trained teacher models, ordered from simplest to most complex.
+  # The training script will load these checkpoints and their corresponding dimensions.
+  teachers:
+    - checkpoint_path: '/path/to/teachers/teacher1_cnn_lstm.pth.tar'
+      # The hidden dimension is required by the FeatureAligner in PMTDModule.
+      hidden_dim: 128
+      name: 'Teacher1_Simple_CNN_LSTM'
+
+    - checkpoint_path: '/path/to/teachers/teacher2_attention.pth.tar'
+      hidden_dim: 256
+      name: 'Teacher2_Attention_Based'
+
+    - checkpoint_path: '/path/to/teachers/teacher3_medium_transformer.pth.tar'
+      hidden_dim: 512
+      name: 'Teacher3_Medium_Transformer'
+      
+    - checkpoint_path: '/path/to/teachers/teacher4_large_transformer.pth.tar'
+      hidden_dim: 768
+      name: 'Teacher4_Large_Transformer'
+
+# --- 5. Dataset Paths ---
+# Dataset paths for the primary task loss.
+dataset:
+  train_annotations: '/path/to/coco/annotations/captions_train2014.json'
+  val_annotations: '/path/to/coco/annotations/captions_val2014.json'
+  image_dir: '/path/to/coco/images/'

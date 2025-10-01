@@ -1,0 +1,37 @@
+ 
+# Configuration for the pre-training phase of the EnhancedFastCap model.
+# This phase focuses on learning robust cross-modal representations from a large dataset.
+
+# --- 1. General Training Configuration ---
+training:
+  seed: 42
+  batch_size: 64           # Pre-training often uses larger batches if possible
+  num_epochs: 30           # A longer training run to learn general features
+  learning_rate: 1.0e-4
+  optimizer: 'AdamW'
+  lr_step_size: 10
+  lr_gamma: 0.1
+  checkpoint_dir: './checkpoints_pretrain' # Save pre-trained models in a dedicated directory
+  
+  # Pre-training starts from scratch
+  resume_checkpoint: null
+
+# --- 2. Student Model Configuration ---
+# The training script will use this path to load the student's architecture.
+student_config_path: 'configs/model/fastcap_base.yaml'
+
+# --- 3. Loss Weights for Pre-training ---
+# During pre-training, we might want to emphasize learning the alignment.
+# This section could be used by the train script to adjust loss contributions.
+loss_weights:
+  caption_loss: 1.0
+  alignment_loss: 1.2  # Slightly higher weight on CMFA loss
+  moe_aux_loss: 0.01
+
+# --- 4. Dataset Paths ---
+# Pre-training often uses larger, combined datasets (e.g., COCO + Visual Genome + SBU Captions).
+# The paths below are conceptual; you would point them to your combined pre-training dataset.
+dataset:
+  train_annotations: '/path/to/pretraining_data/combined_annotations_train.json'
+  val_annotations: '/path/to/pretraining_data/combined_annotations_val.json'
+  image_dir: '/path/to/pretraining_data/images/'

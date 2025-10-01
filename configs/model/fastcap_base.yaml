@@ -1,0 +1,60 @@
+ 
+# Base configuration for the EnhancedFastCap model.
+# This file defines all hyperparameters for the model architecture and training process.
+
+# --- 1. General Model Parameters ---
+model:
+  vocab_size: 10000        # Size of the vocabulary
+  embed_dim: 256           # Main embedding dimension used across the model
+  max_len: 50              # Maximum sequence length for captions
+
+# --- 2. Innovation 1: Spatial-Mamba Vision Backbone ---
+vision:
+  img_size: 224
+  patch_size: 4
+  in_chans: 3
+  # Embedding dimensions for the three stages of the backbone
+  embed_dims: [96, 192, 384]
+  # Number of SpatialMambaBlocks in each stage
+  depths: [2, 2, 6]
+  d_state: 16              # State space dimension (N) for the Mamba blocks
+
+# --- 3. Innovation 8: Cross-Modal Feature Alignment (CMFA) ---
+cmfa:
+  projection_dim: 128      # Dimension of the shared space for alignment
+  num_heads: 8             # Number of heads for cross-modal attention
+
+# --- 4. Innovation 2: Mixture of Expert (MoE) Decoder ---
+moe:
+  num_experts: 4           # Number of expert networks in the decoder
+  num_layers: 4            # Number of MoE layers in the decoder stack
+  num_heads: 8             # Number of attention heads within each expert
+  load_balance_alpha: 0.01 # Coefficient for the auxiliary load balancing loss
+
+# --- 5. Innovation 4 & 7: ICMR & DLAG (Inference Decoder) ---
+icmr:
+  num_layers: 6
+  num_heads: 8
+  max_iterations: 3        # Number of refinement steps (k)
+dlag:
+  min_length: 5            # Minimum predicted caption length
+  max_length: 30           # Maximum predicted caption length
+
+# --- 6. Training Process Configuration ---
+training:
+  seed: 42
+  batch_size: 32
+  num_epochs: 20
+  learning_rate: 1.0e-4
+  optimizer: 'AdamW'
+  lr_step_size: 5          # Reduce LR every 5 epochs
+  lr_gamma: 0.1            # Factor to reduce LR by
+
+  # Paths
+  checkpoint_dir: './checkpoints'
+  resume_checkpoint: null  # Path to a checkpoint to resume from, or null
+
+  # Dataset paths (replace with your actual paths)
+  train_annotations: '/path/to/coco/annotations/captions_train2014.json'
+  val_annotations: '/path/to/coco/annotations/captions_val2014.json'
+  image_dir: '/path/to/coco/images/'

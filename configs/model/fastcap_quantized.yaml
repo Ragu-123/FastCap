@@ -1,0 +1,76 @@
+ 
+# Configuration for the Quantization-Aware Training (QAT) of the EnhancedFastCap model.
+# This file inherits settings from fastcap_base.yaml and adds QAT-specific parameters.
+
+# --- 1. General Model Parameters ---
+# These are typically the same as the base model.
+model:
+  vocab_size: 10000
+  embed_dim: 256
+  max_len: 50
+
+# --- 2. Vision Backbone ---
+vision:
+  img_size: 224
+  patch_size: 4
+  in_chans: 3
+  embed_dims: [96, 192, 384]
+  depths: [2, 2, 6]
+  d_state: 16
+
+# --- 3. CMFA ---
+cmfa:
+  projection_dim: 128
+  num_heads: 8
+
+# --- 4. MoE Decoder ---
+moe:
+  num_experts: 4
+  num_layers: 4
+  num_heads: 8
+  load_balance_alpha: 0.01
+
+# --- 5. Inference Decoder ---
+icmr:
+  num_layers: 6
+  num_heads: 8
+  max_iterations: 3
+dlag:
+  min_length: 5
+  max_length: 30
+
+# --- 6. Training Process Configuration ---
+# QAT often uses a lower learning rate and fewer epochs for fine-tuning.
+training:
+  seed: 42
+  batch_size: 32           # Can sometimes be increased due to smaller model size
+  num_epochs: 5            # QAT fine-tuning usually requires fewer epochs
+  learning_rate: 1.0e-5    # A lower LR is recommended for fine-tuning a quantized model
+  optimizer: 'AdamW'
+  lr_step_size: 2
+  lr_gamma: 0.1
+  checkpoint_dir: './checkpoints_quantized' # Save to a separate directory
+  
+  # Important: Start QAT from a trained full-precision model
+  resume_checkpoint: './checkpoints/best_checkpoint.pth.tar' 
+
+  # Dataset paths remain the same
+  train_annotations: '/path/to/coco/annotations/captions_train2014.json'
+  val_annotations: '/path/to/coco/annotations/captions_val2014.json'
+  image_dir: '/path/to/coco/images/'
+
+# --- 7. Innovation 9: Adaptive Quantization-Aware Training (AQAT) ---
+quantization:
+  # This section is read by the quantize.py and potentially a QAT-enabled train.py script
+  
+  # Percentage of training data to use for sensitivity analysis (e.g., 0.1 for 10%)
+  calibration_subset_ratio: 0.1
+  
+  # Layers with sensitivity above this threshold get higher precision
+  sensitivity_threshold: 0.05
+  
+  # Default bit-width for non-sensitive layers
+  default_bits: 4
+  
+  # Bit-width for sensitive layers
+  sensitive_bits: 8
