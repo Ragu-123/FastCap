@@ -111,6 +111,3 @@ Download the `yerevann/coco-karpathy` dataset from Hugging Face. The provided sc
 bash data/download_coco.sh
 ```
 
----
-
-*End of installation guide.*
