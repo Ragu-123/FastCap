@@ -1,4 +1,3 @@
- 
 # enhanced-fastcap/src/fastcap/scripts/evaluate.py
 
 import argparse
@@ -98,7 +97,7 @@ def main(args):
             # Decode and store the generated captions
             for i, token_id_tensor in enumerate(generated_ids):
                 caption = tokenizer.decode(token_id_tensor)
-                hypotheses[image_ids[i].item()] = [caption]
+                hypotheses[image_ids[i]] = [caption]
 
     # 6. Compute and Display Scores
     print("\nAll hypotheses generated. Computing scores...")
@@ -110,8 +109,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate the EnhancedFastCap Model.")
-    parser.add_argument('--checkpoint', type_str, required=True, help="Path to the trained model checkpoint (.pth.tar).")
-    parser.add_argument('--annotations', type_str, required=True, help="Path to the ground truth JSON annotation file (COCO format).")
+    parser.add_argument('--checkpoint', type=str, required=True, help="Path to the trained model checkpoint (.pth.tar).")
+    parser.add_argument('--annotations', type=str, required=True, help="Path to the ground truth JSON annotation file (COCO format).")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size for evaluation.")
     args = parser.parse_args()
     
@@ -125,6 +124,12 @@ if __name__ == '__main__':
             'moe': {'num_experts': 4, 'num_layers': 2, 'load_balance_alpha': 0.01},
             'icmr': {'max_iterations': 3},
         }
+        # A dummy EnhancedFastCap class for the script to run
+        class EnhancedFastCap:
+            def __init__(self, config):
+                pass
+            def state_dict(self):
+                return {}
         dummy_model = EnhancedFastCap(dummy_config)
         dummy_state = {'state_dict': dummy_model.state_dict(), 'config': dummy_config}
         os.makedirs(os.path.dirname(args.checkpoint) or '.', exist_ok=True)
