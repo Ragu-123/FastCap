@@ -116,7 +116,7 @@ def main(config_path):
 
     # 6. Initialize Metrics Calculator with Real References keyed by image_id
     print("Loading ground truth references for validation...")
-    val_references = {record['image_id']: record['sentences'] for record in val_dataset.hf_dataset}
+    val_references = {record['imgid']: record['sentences'] for record in val_dataset.hf_dataset}
     metrics_calculator = CaptionMetrics(val_references)
 
     # 7. Training and Validation Loop
