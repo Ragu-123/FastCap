@@ -47,13 +47,13 @@ This project uses the `yerevann/coco-karpathy` dataset from Hugging Face. Run th
 bash data/download.sh
 ```
 
-### 2. train cmd command
+### 3. train cmd command
 
 ```bash
 set PYTHONPATH=src && python scripts\train.py --config configs/model/fastcap_base.yaml
 ```
 
-### 3. Inference with a Pre-Trained Model
+### 4. Inference with a Pre-Trained Model
 
 Generate a caption for any image using a trained checkpoint.
 
@@ -63,7 +63,7 @@ python scripts/inference.py \
     --image /path/to/your/image.jpg
 ```
 
-### 4. Training
+### 5. Training
 
 To start a new training run from scratch, use the `train.py` script with the base configuration file.
 
@@ -75,7 +75,7 @@ The training script will handle model initialization, data loading, training, va
 
 ---
 
-### 4. Training for colab
+### 6. Training for colab
 
 To start a new training run from scratch, use the `train.py` script with the base configuration file.
 
