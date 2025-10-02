@@ -1,4 +1,4 @@
-# enhanced-fastcap/src/fastcap/generation/icmr.py
+# src/fastcap/generation/icmr.py (Corrected and Final Version)
 
 import torch
 import torch.nn as nn
@@ -40,20 +40,19 @@ class TransformerDecoderLayer(nn.Module):
 
 class ICMRDecoder(nn.Module):
     """
-    Implements the Iterative Conditional Masked Refinement (ICMR) decoder.
-    
-    This non-autoregressive decoder generates a caption in parallel and then iteratively
-    refines it over a fixed number of steps. This approach is based on "Innovation 4,"
-    using a confidence-based masking strategy to decide which tokens to refine.
+    Implements the Iterative Conditional Masked Refinement (ICMR) decoder,
+    corrected for logical consistency and to align with the innovation's design.
     """
-    def __init__(self, vocab_size, embed_dim=256, vision_dim=256, num_layers=6, num_heads=8, max_len=50, max_iterations=3, dropout=0.1):
+    def __init__(self, vocab_size, embed_dim=256, vision_dim=256, num_layers=6, num_heads=8, max_len=50, max_iterations=3, dropout=0.1, mask_token_id=None):
         super().__init__()
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.max_iterations = max_iterations
         
-        # Special tokens
-        self.mask_token_id = vocab_size - 1 # Convention: last token in vocab is [MASK]
+        # CORRECTED: Use a configurable mask_token_id for robustness
+        if mask_token_id is None:
+            raise ValueError("mask_token_id must be provided to ICMRDecoder.")
+        self.mask_token_id = mask_token_id
 
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
         self.positional_embedding = nn.Parameter(torch.zeros(1, max_len, embed_dim))
@@ -67,7 +66,7 @@ class ICMRDecoder(nn.Module):
         
         self.output_projection = nn.Linear(embed_dim, vocab_size)
 
-        # Confidence head to predict token-level confidence scores
+        # CORRECTED: This confidence head is now used in the refinement step.
         self.confidence_head = nn.Sequential(
             nn.Linear(embed_dim, 1),
             nn.Sigmoid()
@@ -78,24 +77,16 @@ class ICMRDecoder(nn.Module):
         """
         Generates the confidence-based mask for the next refinement iteration.
         Tokens with confidence *below* the adaptive threshold will be masked.
-        
-        Args:
-            confidences (torch.Tensor): Confidence scores for each token, shape (B, S)
-            iteration (int): The current refinement iteration number.
-            tau_0 (float): The initial confidence threshold.
-            alpha (float): The decay rate for the threshold.
-
-        Returns:
-            torch.Tensor: A boolean mask where True indicates a token to be masked.
         """
         # Adaptive threshold: τ_k = τ_0 * e^(-αk)
         tau_k = tau_0 * math.exp(-alpha * iteration)
-        # True for tokens with confidence < threshold (i.e., tokens to be re-predicted)
+        # Returns a boolean mask where True indicates a token to be re-predicted
         return confidences < tau_k
 
     def refinement_step(self, tokens, vision_features):
         """
         Performs a single refinement step of the ICMR process.
+        Returns logits, predicted tokens, and learned confidences.
         """
         B, S = tokens.shape
         token_embeds = self.token_embedding(tokens)
@@ -105,24 +96,21 @@ class ICMRDecoder(nn.Module):
         
         for layer in self.decoder_layers:
             x = layer(x, vision_features)
-            
+        
+        # Get logits from the final hidden states
         logits = self.output_projection(x)
         
-        # Get token predictions and their max probabilities (for the next round's confidence)
-        pred_tokens = torch.argmax(logits, dim=-1)
-        pred_probs = torch.max(F.softmax(logits, dim=-1), dim=-1).values
+        # CORRECTED: Use the confidence_head to get learned confidence scores
+        # Squeeze to remove the last dimension of size 1
+        confidences = self.confidence_head(x).squeeze(-1)
         
-        return pred_tokens, pred_probs
+        pred_tokens = torch.argmax(logits, dim=-1)
+        
+        return logits, pred_tokens, confidences
 
     def forward(self, vision_features):
         """
-        Forward pass for the ICMR Decoder.
-
-        Args:
-            vision_features (torch.Tensor): Vision features from backbone, shape (B, N, D)
-        
-        Returns:
-            torch.Tensor: The final refined caption tokens, shape (B, S)
+        Forward pass for the ICMR Decoder, with corrected iterative logic.
         """
         B, _, D = vision_features.shape
         device = vision_features.device
@@ -136,63 +124,29 @@ class ICMRDecoder(nn.Module):
         current_tokens = torch.full(
             (B, max_len_in_batch), self.mask_token_id, dtype=torch.long, device=device
         )
-        # Confidence is initially 0 for all tokens
-        token_probs = torch.zeros(B, max_len_in_batch, device=device)
 
-        # 3. Iterative Refinement Loop
+        # 3. CORRECTED: Iterative Refinement Loop
         for k in range(self.max_iterations):
-            refined_tokens, new_probs = self.refinement_step(current_tokens, vision_features)
+            # Predict a full sequence of tokens and their confidences from the current input
+            _, pred_tokens, confidences = self.refinement_step(current_tokens, vision_features)
 
-            if k < self.max_iterations - 1:
-                # Determine which tokens to keep vs. which to re-mask for the next iteration
-                mask_for_next_iter = self.generate_mask(token_probs, iteration=k)
-                
-                # CORRECTED LOGIC:
-                # Keep high-confidence tokens from the current refinement.
-                # Explicitly set low-confidence tokens to [MASK] for the next iteration.
-                next_input_tokens = torch.where(mask_for_next_iter, self.mask_token_id, refined_tokens)
-                
-                # Update the probabilities: reset masked tokens to 0, keep others.
-                token_probs = torch.where(mask_for_next_iter, 0.0, new_probs)
-                
-                # Set the input for the next loop
-                current_tokens = next_input_tokens
-            else:
-                # On the final iteration, accept all refined tokens
-                current_tokens = refined_tokens
+            # On the final iteration, accept all predicted tokens and exit the loop
+            if k == self.max_iterations - 1:
+                current_tokens = pred_tokens
+                break
+
+            # For intermediate iterations:
+            # Generate a mask based on the confidences of the tokens we just predicted.
+            # True means low confidence, so we will mask it for the next round.
+            mask_for_next_iter = self.generate_mask(confidences, iteration=k)
+            
+            # Create the input for the next iteration:
+            # - Keep the high-confidence tokens we just predicted.
+            # - Re-mask the low-confidence tokens.
+            current_tokens = torch.where(mask_for_next_iter, self.mask_token_id, pred_tokens)
         
-        # Create a final mask to ignore padding based on predicted lengths
-        # This ensures the output tensor is clean.
+        # 4. Create a final mask to zero out padding based on predicted lengths
         final_mask = torch.arange(max_len_in_batch, device=device)[None, :] >= predicted_lengths[:, None]
-        current_tokens.masked_fill_(final_mask, 0) # Use 0 for padding
+        current_tokens.masked_fill_(final_mask, 0) # Use 0 for padding token
 
         return current_tokens
-
-# Example usage:
-if __name__ == '__main__':
-    batch_size = 4
-    vision_dim = 256
-    vision_seq_len = 49
-    vocab_size = 10000
-
-    # Instantiate the ICMR decoder
-    icmr_decoder = ICMRDecoder(vocab_size=vocab_size, embed_dim=vision_dim, vision_dim=vision_dim)
-    print("Initialized ICMRDecoder module.\n")
-
-    # Create dummy vision features
-    vision_features = torch.randn(batch_size, vision_seq_len, vision_dim)
-    print(f"Input vision features shape: {vision_features.shape}\n")
-
-    # --- Forward pass for inference ---
-    # The decoder handles length prediction and iterative generation internally
-    final_tokens = icmr_decoder(vision_features)
-    
-    print("--- ICMR Decoder Output ---")
-    print(f"Final generated tokens shape: {final_tokens.shape}")
-    print("Example output tokens for the batch:")
-    print(final_tokens)
-
-    assert final_tokens.shape[0] == batch_size
-    assert final_tokens.dim() == 2
-    print("\nOutput shape is correct.")
-
