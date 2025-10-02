@@ -117,7 +117,8 @@ class SpatialMamba(nn.Module):
         A_bar = torch.exp(delta.unsqueeze(-1) * A) # (B, L, d_inner, d_state)
 
         # Discretize B: B_bar = delta * B
-        B_bar = delta.unsqueeze(-1) * B_param.unsqueeze(-2) # (B, L, d_inner, d_state)
+        B_param = B_param.unsqueeze(-1)  # (B, L, d_inner, 1)
+        B_bar = delta.unsqueeze(-1) * B_param # (B, L, d_inner, d_state)
         
         # 4. **CORE CORRECTION**: Parallel Scan (Prefix Sum)
         # This replaces the inefficient `for` loop with a parallel computation.
@@ -126,8 +127,8 @@ class SpatialMamba(nn.Module):
         h = torch.zeros(B, self.d_inner, self.d_state, device=x.device)
         ys = []
         for i in range(L):
-            h = A_bar[:, i] * h + B_bar[:, i] * x_ssm[:, i].unsqueeze(-1)
-            y_i = (h @ C_param[:, i].unsqueeze(-1)).squeeze(-1)
+            h = A_bar[:, i] * h + B_bar[:, i]
+            y_i = torch.bmm(h, C_param[:, i].unsqueeze(-1)).squeeze(-1)
             ys.append(y_i)
         y_ssm = torch.stack(ys, dim=1)
         
@@ -225,7 +226,7 @@ class SpatialMambaBackbone(nn.Module):
 
         # 2. Pass through Mamba stages
         for stage in self.stages:
-            if isinstance(stage[0], SpatialMambaBlock):
+            if isinstance(stage, torch.nn.Sequential) and len(stage) > 0 and isinstance(stage[0], SpatialMambaBlock):
                 # This is a SpatialMambaBlock stage
                 x = stage(x)
             else:
@@ -242,18 +243,3 @@ class SpatialMambaBackbone(nn.Module):
         final_features = x.flatten(start_dim=1, end_dim=2)
         
         return final_features
-
-# Example usage:
-if __name__ == '__main__':
-    # Create a dummy input image tensor
-    dummy_image = torch.randn(2, 3, 224, 224) # (Batch, Channels, Height, Width)
-    
-    # Instantiate the backbone
-    vision_backbone = SpatialMambaBackbone()
-    
-    # Get the vision features
-    features = vision_backbone(dummy_image)
-    
-    print("--- Corrected Spatial-Mamba Vision Backbone ---")
-    print(f"Input image shape: {dummy_image.shape}")
-    print(f"Output feature shape: {features.shape}") # Expected: (2, 49, 384) for 224x224 input
