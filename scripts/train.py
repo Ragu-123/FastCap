@@ -25,19 +25,16 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, num_epochs):
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Training]")
     total_loss = 0.0
 
-    for i, (images, captions, padding_masks) in enumerate(progress_bar):
-        images = images.to(device)
-        captions = captions.to(device)
-        padding_masks = padding_masks.to(device)
-
-        optimizer.zero_grad()
+    # The dataloader now returns 4 items; we ignore image_id during training.
+    for i, (images, captions, padding_masks, _) in enumerate(progress_bar):
+        if images is None: continue # Skip batch if all images failed to load
         
+        images, captions, padding_masks = images.to(device), captions.to(device), padding_masks.to(device)
+        optimizer.zero_grad()
         loss_dict = model(images, captions, padding_masks)
         loss = loss_dict['total_loss']
-        
         loss.backward()
         optimizer.step()
-
         total_loss += loss.item()
         progress_bar.set_postfix(loss=f"{loss.item():.4f}", avg_loss=f"{total_loss / (i + 1):.4f}")
 
@@ -46,23 +43,22 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, num_epochs):
 
 def validate(model, dataloader, metrics_calculator, device, tokenizer):
     """
-    Runs validation and computes metrics.
+    Runs validation and computes metrics using the corrected dataset output.
     """
     model.eval()
     progress_bar = tqdm(dataloader, desc="Validating")
-    
     hypotheses = {}
     
     with torch.no_grad():
-        for i, (images, _, _) in enumerate(progress_bar):
+        # Unpack the image_ids from the dataloader
+        for images, _, _, image_ids in progress_bar:
+            if images is None: continue # Skip batch if all images failed to load
+
             images = images.to(device)
-            
             generated_ids = model(images)
             
             for j, ids in enumerate(generated_ids):
-                # The dataloader provides samples in order, so we can use a simple index as the image ID
-                img_id = i * dataloader.batch_size + j
-                # Decode the generated token IDs into a text caption
+                img_id = image_ids[j] # Use the actual image_id from the dataset
                 caption = tokenizer.decode(ids, skip_special_tokens=True)
                 hypotheses[img_id] = [caption]
 
@@ -80,7 +76,7 @@ def main(config_path):
     torch.manual_seed(config['training']['seed'])
     print(f"Using device: {device}")
 
-    # 3. Load Real Data
+    # 3. Load Real Data using CocoKarpathyDataset
     print("Building tokenizer...")
     tokenizer = CocoKarpathyDataset.build_tokenizer()
     pad_id = tokenizer.pad_token_id
@@ -99,6 +95,7 @@ def main(config_path):
         pad_token_id=pad_id,
         subset_percentage=config['training'].get('subset_percentage', 1.0)
     )
+    
     train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True, collate_fn=CocoKarpathyDataset.collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], collate_fn=CocoKarpathyDataset.collate_fn)
     
@@ -117,9 +114,9 @@ def main(config_path):
     if config['training'].get('resume_checkpoint'):
         start_epoch, best_cider = load_checkpoint(config['training']['resume_checkpoint'], model, optimizer, scheduler)
 
-    # 6. Initialize Metrics Calculator with Real References
+    # 6. Initialize Metrics Calculator with Real References keyed by image_id
     print("Loading ground truth references for validation...")
-    val_references = {i: val_dataset.hf_dataset[i]['sentences'] for i in range(len(val_dataset))}
+    val_references = {record['image_id']: record['sentences'] for record in val_dataset.hf_dataset}
     metrics_calculator = CaptionMetrics(val_references)
 
     # 7. Training and Validation Loop
@@ -136,7 +133,7 @@ def main(config_path):
 
         # 8. Save Checkpoint
         is_best = current_cider > best_cider
-        if is_best:
+        if is_best: 
             best_cider = current_cider
         
         save_checkpoint({
@@ -148,8 +145,7 @@ def main(config_path):
             'config': config
         }, is_best, checkpoint_dir=config['training']['checkpoint_dir'])
 
-    print("Training complete.")
-    print(f"Best CIDEr score achieved: {best_cider:.4f}")
+    print(f"Training complete. Best CIDEr score achieved: {best_cider:.4f}")
 
 
 if __name__ == '__main__':
@@ -157,4 +153,5 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, required=True, help="Path to the configuration YAML file.")
     args = parser.parse_args()
     
+    # This script now expects a valid config file and does not create a dummy one.
     main(args.config)
