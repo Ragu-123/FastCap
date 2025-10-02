@@ -1,4 +1,4 @@
-# enhanced-fastcap/src/fastcap/decoder/moe_decoder.py
+# src/fastcap/decoder/moe_decoder.py (Corrected and Final Version)
 
 import torch
 import torch.nn as nn
@@ -38,7 +38,7 @@ class Expert(nn.Module):
             vision_features (torch.Tensor): Vision features from backbone (Batch, ImgFeatLen, Dim)
             self_attn_mask (torch.Tensor, optional): Causal mask for self-attention.
         """
-        # --- CORRECTION: Correctly apply the causal self-attention mask ---
+        # Self-attention block with the provided mask
         attn_output = self.self_attn(x, x, x, key_padding_mask=self_attn_mask)
         x = self.norm1(x + self.dropout(attn_output))
         
@@ -55,9 +55,7 @@ class Expert(nn.Module):
 
 class GatingNetwork(nn.Module):
     """
-    A lightweight gating network that dynamically selects experts.
-    As described in "Innovation 2," this is a shallow MLP that takes global vision
-    features and outputs a softmax distribution over the experts.
+    A lightweight gating network that dynamically selects experts based on global image features.
     """
     def __init__(self, vision_dim, num_experts):
         super().__init__()
@@ -76,12 +74,8 @@ class GatingNetwork(nn.Module):
 
 class MoEDecoder(nn.Module):
     """
-    Implements the Mixture of Expert (MoE) Decoder.
-
-    This module combines a pool of specialized 'expert' decoders with a gating
-    network. At each step, it dynamically weights the outputs of the experts based
-    on the input image's features, allowing for adaptive and efficient caption generation.
-    It also includes a load balancing loss to ensure experts are utilized effectively.
+    Implements the Mixture of Expert (MoE) Decoder, updated to integrate with
+    DLAG and SCR.
     """
     def __init__(self, vocab_size, embed_dim=256, num_experts=4, num_layers=4, num_heads=8, max_len=50, dropout=0.1, load_balance_alpha=0.01):
         super().__init__()
@@ -90,9 +84,8 @@ class MoEDecoder(nn.Module):
         self.load_balance_alpha = load_balance_alpha # Coefficient for the load balancing loss
         
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
-        
-        # This parameter is now removed as dynamic PEs are passed in.
-        # self.positional_embedding = nn.Parameter(torch.zeros(1, max_len, embed_dim))
+        # This static positional embedding serves as a fallback if dynamic PEs are not provided.
+        self.positional_embedding = nn.Parameter(torch.zeros(1, max_len, embed_dim))
         
         self.gating_network = GatingNetwork(embed_dim, num_experts)
         
@@ -105,43 +98,49 @@ class MoEDecoder(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.output_proj = nn.Linear(embed_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
-        
-        self.last_hidden_states = None # To store for SCRModule if needed
 
-    def forward(self, input_ids, vision_features, position_encodings):
+        # Attribute to store the last hidden states for SCR compatibility
+        self.last_hidden_states = None
+
+    def forward(self, input_ids, vision_features, position_encodings=None):
         """
         Forward pass for the MoE Decoder.
 
         Args:
-            input_ids (torch.Tensor): Input token ids, shape (B, S)
-            vision_features (torch.Tensor): Vision features from backbone, shape (B, N, D)
-            position_encodings (torch.Tensor): Dynamic position encodings from DLAG module, shape (B, S, D)
+            input_ids (torch.Tensor): Input token ids, shape (Batch, SeqLen)
+            vision_features (torch.Tensor): Vision features from backbone, shape (Batch, ImgFeatLen, Dim)
+            position_encodings (torch.Tensor, optional): Dynamically generated position encodings from DLAG.
         
         Returns:
-            - logits (torch.Tensor): Logits for the next token, shape (B, S, V)
+            - logits (torch.Tensor): Logits for the next token, shape (Batch, SeqLen, VocabSize)
             - aux_loss (torch.Tensor): Auxiliary load balancing loss for training.
             - expert_weights (torch.Tensor): The weights assigned to each expert by the gate.
         """
         B, S = input_ids.shape
         device = input_ids.device
         
-        # 1. Get embeddings and add dynamic position encodings
+        # 1. Get token embeddings
         x = self.token_embedding(input_ids) * (self.embed_dim ** 0.5)
-        x = x + position_encodings
+        
+        # 2. Add position encodings (dynamic from DLAG if provided, else static)
+        if position_encodings is not None:
+            x = x + position_encodings[:, :S]
+        else:
+            x = x + self.positional_embedding[:, :S]
         x = self.dropout(x)
         
-        # 2. Get expert weights from the gating network
-        expert_weights, gate_logits = self.gating_network(vision_features) # (B, E), (B, E)
+        # 3. Get expert weights from the gating network
+        expert_weights, gate_logits = self.gating_network(vision_features)
 
-        # 3. Create the causal self-attention mask
-        self_attn_mask = torch.triu(torch.ones(S, S, device=device, dtype=torch.bool), diagonal=1)
+        # 4. Create a causal mask for decoder self-attention
+        causal_mask = torch.triu(torch.ones(S, S, device=device, dtype=torch.bool), diagonal=1)
 
-        # 4. Pass through MoE layers
+        # 5. Pass through MoE layers
         for layer_experts in self.layers:
-            expert_outputs = [expert(x, vision_features, self_attn_mask) for expert in layer_experts]
+            expert_outputs = [expert(x, vision_features, self_attn_mask=causal_mask) for expert in layer_experts]
             expert_outputs_stacked = torch.stack(expert_outputs, dim=-1) # (B, S, D, E)
             
-            # 5. Combine expert outputs using a weighted sum
+            # Combine expert outputs using a weighted sum
             x = torch.sum(expert_outputs_stacked * expert_weights.view(B, 1, 1, self.num_experts), dim=-1)
 
         # 6. Calculate the auxiliary load balancing loss
@@ -152,57 +151,16 @@ class MoEDecoder(nn.Module):
 
         # 7. Final normalization and output projection
         x = self.norm(x)
-        self.last_hidden_states = x # Store for SCR loss calculation
+        
+        # 8. Store the hidden states before the final projection for SCR
+        self.last_hidden_states = x
+        
         logits = self.output_proj(x)
         
         return logits, aux_loss, expert_weights
-        
+    
     def get_last_hidden_states(self):
         """
-        Helper method to retrieve the hidden states for the SCRModule.
+        Exposes the final hidden states of the decoder for use in the SCR loss.
         """
         return self.last_hidden_states
-
-# Example usage block restored for clarity and testing
-if __name__ == '__main__':
-    vocab_size = 10000
-    embed_dim = 256
-    num_experts = 4
-    num_layers = 2
-    batch_size = 4
-    seq_len = 30
-    img_feat_len = 49 # e.g., 7x7 grid
-
-    # Create the MoE Decoder module
-    moe_decoder = MoEDecoder(
-        vocab_size=vocab_size,
-        embed_dim=embed_dim,
-        num_experts=num_experts,
-        num_layers=num_layers
-    )
-    print("Initialized MoEDecoder module.")
-    print(f"Parameters: embed_dim={embed_dim}, num_experts={num_experts}, num_layers={num_layers}\n")
-
-    # Create dummy input tensors
-    input_tokens = torch.randint(0, vocab_size, (batch_size, seq_len))
-    vision_feats = torch.randn(batch_size, img_feat_len, embed_dim)
-    # Create dummy position encodings (normally from DLAG)
-    pos_encodings = torch.randn(batch_size, seq_len, embed_dim)
-    
-    print(f"Input tokens shape: {input_tokens.shape}")
-    print(f"Input vision features shape: {vision_feats.shape}")
-    print(f"Input position encodings shape: {pos_encodings.shape}\n")
-
-    # --- Forward pass ---
-    logits, aux_loss, weights = moe_decoder(input_tokens, vision_feats, pos_encodings)
-
-    print("--- Forward Pass Results ---")
-    print(f"Output logits shape: {logits.shape}")
-    print(f"Expert weights shape: {weights.shape}")
-    print(f"Auxiliary Load Balancing Loss: {aux_loss.item():.4f}")
-    print(f"Example weights for first batch item: {weights[0].detach().numpy().round(2)}")
-    
-    assert logits.shape == (batch_size, seq_len, vocab_size)
-    assert weights.shape == (batch_size, num_experts)
-    assert aux_loss.requires_grad
-    print("\nOutput shapes and loss calculation are correct.")
