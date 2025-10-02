@@ -5,6 +5,11 @@ import torch.nn as nn
 from collections import defaultdict
 from copy import deepcopy
 from tqdm import tqdm
+import yaml # Added for the example
+
+# --- It's good practice to import from the project's own modules in examples ---
+from ..model import EnhancedFastCap
+from ..data.caption_dataset import CocoKarpathyDataset
 
 class StraightThroughEstimator(torch.autograd.Function):
     """
@@ -77,7 +82,7 @@ class AQATModule(nn.Module):
         
         return dequantized
 
-    def compute_layer_sensitivities(self, calibration_dataloader, forward_hook_func):
+    def compute_layer_sensitivities(self, calibration_dataloader, forward_hook_func, device):
         """
         Computes the sensitivity of each layer to quantization based on output perturbation.
         This now directly implements the formula from the idea document:
@@ -87,18 +92,22 @@ class AQATModule(nn.Module):
             calibration_dataloader: Dataloader with calibration data (inputs only needed).
             forward_hook_func: A function that takes a model and inputs, and returns the
                                tensor to be used for sensitivity comparison (e.g., logits).
+            device: The device to run computations on.
         """
         self.model.eval()
         original_model = deepcopy(self.model)
-        device = next(self.model.parameters()).device
-
+        
         # Get baseline outputs with the full-precision model
         baseline_outputs = []
         with torch.no_grad():
             for batch in tqdm(calibration_dataloader, desc="Calibrating (Baseline)"):
-                inputs, _ = batch # We don't need targets for this calculation
-                inputs = inputs.to(device)
-                outputs = forward_hook_func(original_model, inputs)
+                images, captions, _, _ = batch
+                if images is None: continue
+                
+                images = images.to(device)
+                targets = captions.to(device)
+                
+                outputs, _ = forward_hook_func(original_model, images, targets)
                 baseline_outputs.append(outputs.cpu()) # Store on CPU to save GPU memory
 
         # Compute sensitivity for each layer
@@ -115,9 +124,13 @@ class AQATModule(nn.Module):
             quantized_outputs = []
             with torch.no_grad():
                 for batch in calibration_dataloader:
-                    inputs, _ = batch
-                    inputs = inputs.to(device)
-                    outputs = forward_hook_func(quantized_model, inputs)
+                    images, captions, _, _ = batch
+                    if images is None: continue
+
+                    images = images.to(device)
+                    targets = captions.to(device)
+                    
+                    outputs, _ = forward_hook_func(quantized_model, images, targets)
                     quantized_outputs.append(outputs.cpu())
             
             # CORRECTED: Calculate sensitivity based on L2 norm difference, as per the document
@@ -151,43 +164,49 @@ class AQATModule(nn.Module):
             # Replace the weight with the STE-wrapped quantized version
             module.weight.data = StraightThroughEstimator.apply(quantized_weight, original_weight)
 
-# Example usage:
+# --- Updated Example Usage ---
 if __name__ == '__main__':
-    # 1. Define a simple mock model to quantize
-    class MockModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.conv1 = nn.Conv2d(3, 16, 3)
-            self.relu = nn.ReLU()
-            self.fc1 = nn.Linear(16 * 30 * 30, 100) # Simplified dimensions
-            self.fc2 = nn.Linear(100, 10) # Sensitive layer
-        
-        def forward(self, x):
-            x = self.relu(self.conv1(x))
-            x = x.view(x.size(0), -1)
-            x = self.relu(self.fc1(x))
-            return self.fc2(x)
+    # This example demonstrates how to use AQATModule with the actual project components.
+    
+    # 1. Create a dummy config for the model
+    dummy_config = {
+        'model': {'vocab_size': 1000, 'embed_dim': 256},
+        'vision': {'embed_dims': [64, 128, 256], 'depths': [2, 2, 2]},
+        'cmfa': {'projection_dim': 128},
+        'moe': {'num_experts': 4, 'num_layers': 2, 'load_balance_alpha': 0.01},
+        'icmr': {'max_iterations': 3},
+        'training': {} # Needs to be present
+    }
 
-    # 2. Setup
-    model = MockModel()
+    # 2. Setup a mock model and the AQAT module
+    model = EnhancedFastCap(dummy_config)
     aqat_module = AQATModule(model)
-    print("Initialized AQATModule.\n")
+    print("Initialized AQATModule with EnhancedFastCap.\n")
     
-    # Create dummy calibration data (note: targets are not used by the new method)
-    calibration_data = [(torch.randn(4, 3, 32, 32), torch.randint(0, 10, (4,))) for _ in range(5)]
-    
-    # Define a forward hook function for the mock model
-    def mock_forward_hook(hook_model, inputs):
-        return hook_model(inputs)
+    # 3. Create dummy calibration data
+    # In a real script (like quantize.py), you'd use the real CocoKarpathyDataset
+    class DummyDataset(torch.utils.data.Dataset):
+        def __len__(self): return 10
+        def __getitem__(self, idx):
+            return torch.randn(3, 224, 224), torch.randint(1, 1000, (20,)), None, idx
 
-    # 3. Run the AQAT pipeline
+    dataloader = torch.utils.data.DataLoader(DummyDataset(), batch_size=4)
+    
+    # 4. Define a forward hook that matches the model's training step
+    def calibration_forward(calib_model, inputs, targets):
+        # This function should mimic a simplified forward pass to get logits
+        output_dict = calib_model.default_train_step(inputs, targets, None)
+        # The sensitivity analysis needs the logits and the ground truth labels
+        return output_dict['nar_logits'], targets
+
+    # 5. Run the pipeline (on CPU for this example)
     print("--- 1. Computing Layer Sensitivities ---")
-    aqat_module.compute_layer_sensitivities(calibration_data, mock_forward_hook)
+    aqat_module.compute_layer_sensitivities(dataloader, calibration_forward, device='cpu')
     
     print("\n--- 2. Performing Adaptive Bit Allocation ---")
     aqat_module.adaptive_bit_allocation()
 
-    # 4. Simulate a QAT training step
+    # 6. Simulate a QAT training step
     print("\n--- 3. Simulating a Quantization-Aware Training Step ---")
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     
@@ -195,15 +214,19 @@ if __name__ == '__main__':
     aqat_module.apply_quantization_to_model()
     
     # Dummy forward and backward pass
-    inputs, targets = calibration_data[0]
+    images, captions, _, _ = next(iter(dataloader))
     loss_fn = nn.CrossEntropyLoss()
-    outputs = model(inputs)
-    loss = loss_fn(outputs, targets)
+    
+    # Get model output (which includes the loss)
+    output_dict = model(images, captions, None)
+    loss = output_dict['total_loss']
     loss.backward()
     optimizer.step()
     
     print(f"QAT forward pass successful. Loss: {loss.item():.4f}")
+    
     # Check if gradients flowed to the original weights (they should not be None)
-    assert model.fc2.weight.grad is not None
+    # Checking a backbone layer and a decoder layer
+    assert model.vision_backbone.stages[0][0].spatial_mamba.in_proj.weight.grad is not None
+    assert model.training_decoder.output_proj.weight.grad is not None
     print("Gradients successfully flowed through the quantized layers via STE.")
-
