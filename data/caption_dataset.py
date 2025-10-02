@@ -71,7 +71,7 @@ class CocoKarpathyDataset(Dataset):
     def __getitem__(self, idx):
         record = self.hf_dataset[idx]
         # CRITICAL FIX: Get the image_id for evaluation purposes.
-        image_id = record['image_id']
+        image_id = record['imgid']
         
         # Robust image loading from either PIL object or URL
         try:
