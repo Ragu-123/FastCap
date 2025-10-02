@@ -1,4 +1,3 @@
- 
 # enhanced-fastcap/src/fastcap/generation/dlag.py
 
 import torch
@@ -79,36 +78,44 @@ class DynamicPositionEncoding(nn.Module):
         Returns:
             torch.Tensor: The dynamic position encodings, shape (B, max_len_in_batch, D)
         """
+        # --- CORE CORRECTION: Vectorized implementation to remove the inefficient for-loop ---
         batch_size = predicted_lengths.size(0)
-        # Determine the max length required for this specific batch
         batch_max_length = predicted_lengths.max().item()
         device = predicted_lengths.device
 
-        pe = torch.zeros(batch_size, batch_max_length, self.d_model, device=device)
-        positions = torch.arange(0, batch_max_length, device=device).float().unsqueeze(0) # (1, max_len)
-
-        for b in range(batch_size):
-            L = predicted_lengths[b].float()
-            pos = positions[0, :int(L)] # Only compute up to the predicted length for this item
-
-            # 1. Position Normalization: r = pos / L
-            r = pos / (L + 1e-8) # Add epsilon for stability
-
-            # 2. Position Normalization Function: f(r) = sqrt(2) * sin(pi*r/2)
-            f_r = math.sqrt(2) * torch.sin(math.pi * r / 2)
-            
-            # 3. Length Scaling Function: g(L) = log(1 + L/L_ref)
-            g_L = torch.log(1 + L / self.l_ref)
-
-            # 4. Base Sinusoidal Encoding
-            pos_expanded = pos.unsqueeze(1) # (L, 1)
-            sin_enc = torch.sin(pos_expanded * self.div_term)
-            cos_enc = torch.cos(pos_expanded * self.div_term)
-            
-            # 5. Combine into final dynamic encoding
-            pe[b, :int(L), 0::2] = sin_enc * f_r.unsqueeze(1) * g_L
-            pe[b, :int(L), 1::2] = cos_enc * f_r.unsqueeze(1) * g_L
+        # Create positions tensor for the entire batch: (B, max_len_in_batch)
+        positions = torch.arange(0, batch_max_length, device=device).float().unsqueeze(0).repeat(batch_size, 1)
         
+        # Prepare lengths for broadcasting: (B, 1)
+        L = predicted_lengths.float().unsqueeze(1)
+
+        # 1. Position Normalization: r = pos / L
+        r = positions / (L + 1e-8) # Add epsilon for stability
+
+        # 2. Position Normalization Function: f(r) = sqrt(2) * sin(pi*r/2)
+        f_r = math.sqrt(2) * torch.sin(math.pi * r / 2)
+        
+        # 3. Length Scaling Function: g(L) = log(1 + L/L_ref)
+        g_L = torch.log(1 + L / self.l_ref)
+
+        # 4. Base Sinusoidal Encoding
+        # (B, max_len, 1) * (D/2) -> (B, max_len, D/2)
+        sin_enc = torch.sin(positions.unsqueeze(-1) * self.div_term)
+        cos_enc = torch.cos(positions.unsqueeze(-1) * self.div_term)
+        
+        # 5. Combine into final PE tensor and apply dynamic scaling
+        pe = torch.zeros(batch_size, batch_max_length, self.d_model, device=device)
+        pe[..., 0::2] = sin_enc
+        pe[..., 1::2] = cos_enc
+        
+        # Apply scaling factors f(r) and g(L)
+        # (B, max_len, D) * (B, max_len, 1) * (B, 1, 1) -> (B, max_len, D)
+        pe = pe * f_r.unsqueeze(-1) * g_L.unsqueeze(-1)
+        
+        # 6. Mask out positions beyond the predicted length for each item
+        mask = torch.arange(batch_max_length, device=device)[None, :] >= predicted_lengths[:, None]
+        pe.masked_fill_(mask.unsqueeze(-1), 0.0)
+
         return pe
 
 
