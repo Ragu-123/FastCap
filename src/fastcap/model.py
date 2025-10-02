@@ -109,6 +109,8 @@ class EnhancedFastCap(nn.Module):
         self.config = config
         self.training_mode = config['training'].get('mode', 'default')
         self.vocab_size = config['model']['vocab_size']
+        # Define the mask token ID, conventionally the last token in the vocabulary
+        self.mask_token_id = self.vocab_size - 1
 
         # --- Base Modules (Innovations 1, 2, 4, 7, 8) ---
         self.vision_backbone = SpatialMambaBackbone(
@@ -132,12 +134,14 @@ class EnhancedFastCap(nn.Module):
         self.inference_decoder = ICMRDecoder(
             vocab_size=self.vocab_size, embed_dim=config['model']['embed_dim'],
             vision_dim=config['vision']['embed_dims'][-1],
-            max_iterations=config['icmr']['max_iterations']
+            max_iterations=config['icmr']['max_iterations'],
+            mask_token_id=self.mask_token_id # Pass the ID explicitly
         )
 
         # --- Conditional Modules for Advanced Training (Innovations 5, 6) ---
         if self.training_mode == 'scr':
             self.ar_decoder = ARDecoder(vocab_size=self.vocab_size, embed_dim=config['model']['embed_dim'])
+            # CORRECTED: Pass the tokenizer to the SCRModule
             self.scr_module = SCRModule(nar_dim=config['model']['embed_dim'], ar_dim=config['model']['embed_dim'], tokenizer=tokenizer)
         if self.training_mode == 'pmtd':
             self.pmtd_module = PMTDModule(student_model=self, teacher_models=teacher_models, student_dim=config['model']['embed_dim'], teacher_dims=config['distillation']['teacher_dims'])
@@ -168,9 +172,7 @@ class EnhancedFastCap(nn.Module):
         position_encodings = dlag_output["position_encodings"]
         
         # 4. Prepare a fully masked input for the NAR decoder
-        # The mask token ID is conventionally the last one in the vocabulary
-        mask_token_id = self.vocab_size - 1
-        nar_input_ids = torch.full_like(captions, fill_value=mask_token_id)
+        nar_input_ids = torch.full_like(captions, fill_value=self.mask_token_id)
         
         # 5. Pass through the NAR (MoE) decoder to predict all tokens in parallel
         nar_logits, moe_aux_loss, _ = self.training_decoder(
@@ -191,8 +193,6 @@ class EnhancedFastCap(nn.Module):
         
         # Optional: Add SCR loss if in that training mode
         if self.training_mode == 'scr':
-            # This part requires the MoEDecoder to have a 'get_last_hidden_states' method
-            # For now, we assume it's implemented.
             nar_hidden_states = self.training_decoder.get_last_hidden_states()
             ar_outputs = self.ar_decoder(aligned_vision_features, captions)
             nar_outputs_dict = {'logits': nar_logits, 'hidden_states': nar_hidden_states}
