@@ -75,6 +75,25 @@ The training script will handle model initialization, data loading, training, va
 
 ---
 
+### 4. Training for colab
+
+To start a new training run from scratch, use the `train.py` script with the base configuration file.
+
+```bash
+# Simplified script (ONLY AFTER you update your GitHub repo)
+!git clone https://github.com/Ragu-123/FastCap.git
+%cd FastCap
+!pip install -r requirements.txt
+!bash data/download_coco.sh
+!python data/build_vocab.py
+!PYTHONPATH=src python scripts/train.py --config configs/model/fastcap_base.yaml
+
+```
+
+The training script will handle model initialization, data loading, training, validation, and checkpointing.
+
+---
+
 
 ## Acknowledgements
 
