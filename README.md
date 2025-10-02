@@ -47,6 +47,12 @@ This project uses the `yerevann/coco-karpathy` dataset from Hugging Face. Run th
 bash data/download.sh
 ```
 
+### 2. train cmd command
+
+```bash
+set PYTHONPATH=src && python scripts\train.py --config configs/model/fastcap_base.yaml
+```
+
 ### 3. Inference with a Pre-Trained Model
 
 Generate a caption for any image using a trained checkpoint.
