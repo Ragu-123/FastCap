@@ -12,7 +12,7 @@ from tqdm import tqdm
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from data.datasets import CocoKarpathyDataset
+from data.caption_dataset import CocoKarpathyDataset
 from fastcap.model import EnhancedFastCap, adapt_backbone
 from fastcap.utils.checkpointing import save_checkpoint, load_checkpoint
 from fastcap.utils.metrics import CaptionMetrics
