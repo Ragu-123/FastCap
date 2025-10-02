@@ -8,15 +8,12 @@ with open('requirements.txt') as f:
 setup(
     name='fastcap',
     version='0.1.0',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='RAGUNATH R',
+    author_email='ragunathravi73@gmail.com',
     description='FastCap: An Efficient Image Captioning Model',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
-    url='https://github.com/your-username/enhanced-fastcap',
-    project_urls={
-        "Bug Tracker": "https://github.com/your-username/enhanced-fastcap/issues",
-    },
+    url='https://github.com/Ragu-123/FastCap.git',
     license='GNU General Public License v3 (GPLv3)',
     package_dir={'': 'src'},
     packages=find_packages(where='src'),
