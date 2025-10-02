@@ -43,6 +43,7 @@ dlag:
 # --- 6. Training Process Configuration ---
 training:
   seed: 42
+  subset_percentage: 0.25 
   batch_size: 32
   num_epochs: 20
   learning_rate: 1.0e-4
