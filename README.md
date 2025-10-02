@@ -80,7 +80,7 @@ The training script will handle model initialization, data loading, training, va
 To start a new training run from scratch, use the `train.py` script with the base configuration file.
 
 ```bash
-# Simplified script (ONLY AFTER you update your GitHub repo)
+# Simplified script 
 !git clone https://github.com/Ragu-123/FastCap.git
 %cd FastCap
 !pip install -r requirements.txt
