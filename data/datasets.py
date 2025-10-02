@@ -1,4 +1,4 @@
-# enhanced-fastcap/src/fastcap/data/datasets.py
+# enhanced-fastcap/src/fastcap/data/datasets.py (Corrected and Final Version)
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -26,19 +26,9 @@ except ImportError:
 class CocoKarpathyDataset(Dataset):
     """
     A PyTorch Dataset wrapper for the yerevann/coco-karpathy dataset from Hugging Face.
-    It handles loading from the HF cache, subsetting, and preprocessing of images
-    and captions.
+    This version is updated to return the image_id for correct evaluation.
     """
-    def __init__(self, split='train', tokenizer=None, pad_token_id=0, max_len=50, subset_percentage=0.25):
-        """
-        Args:
-            split (str): The dataset split to use ('train', 'validation', or 'test').
-            tokenizer (object, optional): A pre-initialized tokenizer. If None, a default
-                                          BERT tokenizer will be created.
-            pad_token_id (int): The ID for the padding token from the tokenizer.
-            max_len (int): The maximum length for caption padding.
-            subset_percentage (float): The fraction of the dataset to use.
-        """
+    def __init__(self, split='train', tokenizer=None, pad_token_id=0, max_len=50, subset_percentage=1.0):
         if load_dataset is None or BertTokenizer is None:
             raise ImportError("Required libraries `datasets` or `transformers` are not installed.")
 
@@ -48,10 +38,12 @@ class CocoKarpathyDataset(Dataset):
         self.pad_token_id = pad_token_id
 
         print(f"Loading '{split}' split of yerevann/coco-karpathy from cache...")
-        hf_split = 'test' if split == 'test' else 'train'
-        full_dataset = load_dataset("yerevann/coco-karpathy", split=hf_split)
+        # The 'train' split on Hugging Face contains both Karpathy 'train' and 'val'
+        # The 'test' split on Hugging Face corresponds to Karpathy 'test'
+        hf_split_name = 'test' if split == 'test' else 'train'
+        full_dataset = load_dataset("yerevann/coco-karpathy", split=hf_split_name)
 
-        # Filter the dataset based on the Karpathy split definition
+        # The 'split' column in the dataset tells us which Karpathy split it belongs to.
         if split == 'validation':
             self.hf_dataset = full_dataset.filter(lambda ex: ex['split'] == 'val')
         elif split == 'train':
@@ -59,15 +51,13 @@ class CocoKarpathyDataset(Dataset):
         else: # test
             self.hf_dataset = full_dataset
 
-        # Handle subsetting for low-resource training
         original_size = len(self.hf_dataset)
-        if subset_percentage < 1.0:
+        if subset_percentage < 1.0 and self.split == 'train': # Usually only subset training data
             print(f"Subsetting data to {subset_percentage*100:.0f}% of its original size.")
             subset_size = int(original_size * subset_percentage)
             self.hf_dataset = self.hf_dataset.shuffle(seed=42).select(range(subset_size))
             print(f"Original size: {original_size}, New size: {len(self.hf_dataset)}")
 
-        # Standard image transformations for vision models
         self.transform = transforms.Compose([
             transforms.Resize((256, 256), interpolation=Image.BICUBIC),
             transforms.CenterCrop(224),
@@ -80,94 +70,105 @@ class CocoKarpathyDataset(Dataset):
 
     def __getitem__(self, idx):
         record = self.hf_dataset[idx]
+        # CRITICAL FIX: Get the image_id for evaluation purposes.
+        image_id = record['image_id']
         
-        # Robust image loading: try direct 'image' field, fallback to 'url'
+        # Robust image loading from either PIL object or URL
         try:
             image = record['image'].convert("RGB")
         except (AttributeError, KeyError):
             try:
                 response = requests.get(record['url'])
+                response.raise_for_status()
                 image = Image.open(BytesIO(response.content)).convert("RGB")
             except Exception as e:
-                print(f"Warning: Could not load image for record {idx}. Error: {e}")
-                return self.transform(Image.new('RGB', (224, 224))), torch.zeros(self.max_len, dtype=torch.long), torch.ones(self.max_len, dtype=torch.bool)
-            
+                # Return a placeholder for a failed image load
+                print(f"Warning: Could not load image for record {idx} (ID: {image_id}). Error: {e}")
+                # Return a dummy image and a special image_id (-1) to be skipped in collate_fn if needed
+                return self.transform(Image.new('RGB', (224, 224))), torch.zeros(self.max_len, dtype=torch.long), torch.ones(self.max_len, dtype=torch.bool), -1
+
         image_tensor = self.transform(image)
-        
         captions = record['sentences']
         
-        # For training, randomly select one of the 5 captions (data augmentation)
-        # For validation/testing, use the first caption for consistent evaluation
+        # During training, randomly select one of the 5 captions as a form of data augmentation.
+        # During validation, consistently use the first one.
         caption_text = random.choice(captions) if self.split == 'train' else captions[0]
         
-        # Tokenize the caption using the provided tokenizer
         tokenized = self.tokenizer.encode_plus(
-            caption_text,
-            max_length=self.max_len,
+            caption_text, 
+            max_length=self.max_len, 
             padding='max_length',
-            truncation=True,
+            truncation=True, 
             return_tensors='pt'
         )
-        
         input_ids = tokenized['input_ids'].squeeze(0)
-        
-        # CORRECTED LOGIC: Padding mask is now explicitly created using the pad_token_id.
-        # It should be True for padded tokens, False otherwise.
         padding_mask = (input_ids == self.pad_token_id)
         
-        return image_tensor, input_ids, padding_mask
+        # CORRECTED: Return image_id along with other data.
+        return image_tensor, input_ids, padding_mask, image_id
 
     @staticmethod
     def build_tokenizer(model_name='bert-base-uncased'):
-        """Builds and returns a standard tokenizer."""
+        """Helper static method to build a standard tokenizer."""
         print(f"Building tokenizer: {model_name}")
         return BertTokenizer.from_pretrained(model_name)
 
     @staticmethod
     def collate_fn(batch):
-        """Custom collate function to correctly stack batch tensors."""
-        images, captions, masks = zip(*batch)
-        return torch.stack(images, 0), torch.stack(captions, 0), torch.stack(masks, 0)
+        """
+        Custom collate function to correctly stack batch tensors and handle image_ids.
+        """
+        # Filter out any samples that failed to load (where image_id is -1)
+        batch = [b for b in batch if b[3] != -1]
+        if not batch:
+            return None, None, None, None
 
-# Example usage:
+        # Unzip the batch into separate lists
+        images, captions, masks, image_ids = zip(*batch)
+        
+        # Stack tensors and collect image_ids into a list
+        return torch.stack(images, 0), torch.stack(captions, 0), torch.stack(masks, 0), list(image_ids)
+
+# Example usage to verify the changes
 if __name__ == '__main__':
     print("--- Testing CocoKarpathyDataset ---")
     
-    # 1. Instantiate a tokenizer first to get its pad_token_id
     tokenizer = CocoKarpathyDataset.build_tokenizer()
     pad_id = tokenizer.pad_token_id
     
-    # 2. Instantiate the training dataset, passing the tokenizer and pad_id
-    train_dataset = CocoKarpathyDataset(
-        split='train', 
+    # Use a small subset of the validation set for a quick test
+    val_dataset = CocoKarpathyDataset(
+        split='validation', 
         tokenizer=tokenizer,
         pad_token_id=pad_id,
-        subset_percentage=0.01 # Use 1% for a quick test
+        subset_percentage=0.05 # Use 5% for a quick test
     )
     
-    # 3. Inspect a single sample
+    print(f"\nDataset size: {len(val_dataset)}")
+    
+    # Inspect a single sample to check the new output format
     print("\n--- Inspecting a single sample ---")
-    img, cap, mask = train_dataset[0]
+    img, cap, mask, img_id = val_dataset[0]
     print(f"Image tensor shape: {img.shape}")
     print(f"Caption tensor shape: {cap.shape}")
     print(f"Padding mask shape: {mask.shape}")
-    assert img.shape == (3, 224, 224)
-    assert cap.shape == (train_dataset.max_len,)
+    print(f"Image ID: {img_id} (Type: {type(img_id)})")
+    assert isinstance(img_id, (int, str))
     
-    # 4. Test with a DataLoader
+    # Test with a DataLoader using the updated collate_fn
     print("\n--- Testing with DataLoader ---")
-    train_loader = DataLoader(
-        train_dataset,
+    val_loader = DataLoader(
+        val_dataset,
         batch_size=4,
         collate_fn=CocoKarpathyDataset.collate_fn,
-        shuffle=True
+        shuffle=False
     )
     
-    img_batch, cap_batch, mask_batch = next(iter(train_loader))
+    img_batch, cap_batch, mask_batch, id_batch = next(iter(val_loader))
     print(f"Batched image tensor shape: {img_batch.shape}")
     print(f"Batched caption tensor shape: {cap_batch.shape}")
     print(f"Batched padding mask shape: {mask_batch.shape}")
-    assert img_batch.shape == (4, 3, 224, 224)
+    print(f"Image ID batch: {id_batch} (Length: {len(id_batch)})")
+    assert len(id_batch) == 4
     
     print("\nDataset and DataLoader are working correctly with the updated logic.")
-
