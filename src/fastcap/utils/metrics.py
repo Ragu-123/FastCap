@@ -1,17 +1,18 @@
- 
-# enhanced-fastcap/src/fastcap/utils/metrics.py
-
 try:
     from pycocoevalcap.bleu.bleu import Bleu
     from pycocoevalcap.meteor.meteor import Meteor
     from pycocoevalcap.rouge.rouge import Rouge
     from pycocoevalcap.cider.cider import Cider
     from pycocoevalcap.spice.spice import Spice
+    METEOR_AVAILABLE = True
+    SPICE_AVAILABLE = True
 except ImportError:
     print("Warning: `pycocoevalcap` is not installed. Metrics calculation will not work.")
     print("Please install it. A common way is: `pip install adeb-remedy`")
     # Define dummy classes if the import fails to avoid runtime errors
     Bleu = Meteor = Rouge = Cider = Spice = object
+    METEOR_AVAILABLE = False
+    SPICE_AVAILABLE = False
 
 
 class CaptionMetrics:
@@ -27,13 +28,38 @@ class CaptionMetrics:
                                ground truth reference captions.
                                Example: {0: ["a cat", "a feline"], 1: ["a dog"]}
         """
-        self.scorers = [
-            (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
-            (Meteor(), "METEOR"),
-            (Rouge(), "ROUGE_L"),
-            (Cider(), "CIDEr"),
-            (Spice(), "SPICE")
-        ]
+        self.scorers = []
+        
+        # BLEU (always works - pure Python)
+        if METEOR_AVAILABLE:
+            self.scorers.append((Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]))
+        
+        # METEOR (requires Java)
+        if METEOR_AVAILABLE:
+            try:
+                meteor_scorer = Meteor()
+                self.scorers.append((meteor_scorer, "METEOR"))
+            except Exception as e:
+                print(f"Warning: METEOR initialization failed (Java required): {e}")
+                print("Skipping METEOR metric. Install Java to enable it.")
+        
+        # ROUGE (pure Python)
+        if METEOR_AVAILABLE:
+            self.scorers.append((Rouge(), "ROUGE_L"))
+        
+        # CIDEr (pure Python)
+        if METEOR_AVAILABLE:
+            self.scorers.append((Cider(), "CIDEr"))
+        
+        # SPICE (requires Java)
+        if SPICE_AVAILABLE:
+            try:
+                spice_scorer = Spice()
+                self.scorers.append((spice_scorer, "SPICE"))
+            except Exception as e:
+                print(f"Warning: SPICE initialization failed (Java required): {e}")
+                print("Skipping SPICE metric. Install Java to enable it.")
+        
         self.references = self._format_for_eval(references)
 
     def _format_for_eval(self, captions_dict):
@@ -68,16 +94,21 @@ class CaptionMetrics:
         
         all_scores = {}
         for scorer, method in self.scorers:
-            print(f'Computing {scorer.method()} score...')
-            score, scores = scorer.compute_score(self.references, formatted_hypotheses)
-            
-            if isinstance(method, list): # For BLEU
-                for sc, scs, m in zip(score, scores, method):
-                    all_scores[m] = sc
-            else: # For other metrics
-                all_scores[method] = score
+            try:
+                print(f'Computing {scorer.method()} score...')
+                score, scores = scorer.compute_score(self.references, formatted_hypotheses)
+                
+                if isinstance(method, list): # For BLEU
+                    for sc, scs, m in zip(score, scores, method):
+                        all_scores[m] = sc
+                else: # For other metrics
+                    all_scores[method] = score
+            except Exception as e:
+                print(f"Error computing {method}: {e}")
+                continue
         
         return all_scores
+
 
 # Example usage:
 if __name__ == '__main__':

@@ -4,7 +4,7 @@
 
 # --- 1. General Model Parameters ---
 model:
-  vocab_size: 10000        # Size of the vocabulary
+  vocab_size: 30522       # Size of the vocabulary
   embed_dim: 256           # Main embedding dimension used across the model
   max_len: 50              # Maximum sequence length for captions
 
@@ -43,8 +43,8 @@ dlag:
 # --- 6. Training Process Configuration ---
 training:
   seed: 42
-  subset_percentage: 0.25 
-  batch_size: 32
+  subset_percentage: 0.10
+  batch_size: 4
   num_epochs: 20
   learning_rate: 1.0e-4
   optimizer: 'AdamW'
